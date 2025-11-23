@@ -264,7 +264,6 @@ async def wait_for_data(openid: str, qr_manager: QRManager) -> Optional[List[Dic
     while retry_count < max_retries and not qr_manager.is_shutting_down:
         try:
             data = getData(openid)
-            print(data)
             logger.debug(f"获取到数据: {data}")
 
             # 处理返回字典的情况（错误信息）
