@@ -1,2 +1,5 @@
 import os
-os.environ["OPENID"] = "4d5e49746d8fe90d1f37b61af102ad26"
+import configparser
+config = configparser.ConfigParser()
+config.read('config.ini')
+os.environ["OPENID"] =config.get("user","openid")

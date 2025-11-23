@@ -1,36 +1,30 @@
 import asyncio
 import websockets
 import json
-import signal
-import sys
-# from getdata import getData
-import requests
+import logging
+from typing import Optional, Callable
 
-
-class deal:
-    def __init__(self, url):
-        self.url = url
-        self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 NetType/WIFI MicroMessenger/7.0.20.1781(0x6700143B) WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf2541411) XWEB/16965 Flue"}
-
-    def main(self):
-        s = requests.Session()
-        response = s.get(self.url, headers=self.headers, verify=False)
-        print(response.url)
+logger = logging.getLogger(__name__)
 
 
 class TeacherMateWebSocketClient:
-    def __init__(self, sign_id, qr_callback=None):
+    """改进的WebSocket客户端 - 更好的关闭机制"""
+
+    def __init__(self, sign_id: int, qr_callback: Optional[Callable] = None):
         self.qr_callback = qr_callback
         self.sign_id = sign_id
         self.client_id = ""
         self.counter = 3
         self.done = asyncio.Event()
-        self.websocket = None
-        self.webT = False
+        self.websocket: Optional[websockets.WebSocketClientProtocol] = None
         self.is_shutting_down = False
         self.wait_time = 1
-    async def receive_handler(self):
+        self.reconnect_delay = 5
+        self.max_reconnect_attempts = 3
+        self.reconnect_attempts = 0
+        self.receive_task: Optional[asyncio.Task] = None
+
+    async def receive_handler(self) -> None:
         """接收消息处理函数"""
         try:
             async for message in self.websocket:
@@ -38,110 +32,146 @@ class TeacherMateWebSocketClient:
                     break
 
                 msg_str = message.decode('utf-8') if isinstance(message, bytes) else message
-                # 检测包含qrUrl的消息
+                logger.debug(f"收到消息: {msg_str}")
+
                 if "qrUrl" in msg_str:
-                    try:
-                        qr_data = json.loads(msg_str)
-                        if isinstance(qr_data, list) and len(qr_data) > 0:
-                            qr_code_url = qr_data[0]["data"]["qrUrl"]
-                            # 通过回调函数传输URL
-                            if self.qr_callback and not self.is_shutting_down:
-                                self.qr_callback(qr_code_url)
-
-                            if self.webT:
-                                await self.graceful_shutdown()
-
-                    except json.JSONDecodeError:
-                        pass
+                    await self._handle_qr_message(msg_str)
 
         except websockets.exceptions.ConnectionClosed:
+            if not self.is_shutting_down:
+                logger.info("WebSocket连接已关闭")
             self.done.set()
         except Exception as e:
             if not self.is_shutting_down:
-                print(f"接收消息错误: {e}")
+                logger.error(f"接收消息错误: {e}")
+            self.done.set()
 
-    async def start(self):
-        """启动WebSocket客户端"""
-        if self.is_shutting_down:
-            return
+    async def _handle_qr_message(self, message: str) -> None:
+        """处理包含二维码URL的消息"""
+        try:
+            qr_data = json.loads(message)
+            if isinstance(qr_data, list) and len(qr_data) > 0:
+                qr_code_url = qr_data[0]["data"]["qrUrl"]
+                logger.info(f"获取到二维码URL: {qr_code_url[:50]}...")
 
+                if self.qr_callback and not self.is_shutting_down:
+                    self.qr_callback(qr_code_url)
+
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON解析失败: {e}")
+        except KeyError as e:
+            logger.error(f"消息格式错误，缺少键: {e}")
+
+    async def start(self) -> None:
+        """启动WebSocket客户端，支持重连"""
+        while (self.reconnect_attempts < self.max_reconnect_attempts and
+               not self.is_shutting_down):
+
+            try:
+                await self._connect_and_run()
+                break
+
+            except (websockets.exceptions.ConnectionClosed,
+                    ConnectionRefusedError,
+                    asyncio.TimeoutError) as e:
+
+                self.reconnect_attempts += 1
+                if self.reconnect_attempts < self.max_reconnect_attempts and not self.is_shutting_down:
+                    logger.warning(f"连接失败，{self.reconnect_delay}秒后重试... ({e})")
+                    await asyncio.sleep(self.reconnect_delay)
+                else:
+                    logger.error(f"达到最大重连次数，放弃连接: {e}")
+
+            except Exception as e:
+                if not self.is_shutting_down:
+                    logger.error(f"WebSocket客户端意外错误: {e}")
+                break
+
+    async def _connect_and_run(self) -> None:
+        """连接并运行WebSocket客户端"""
         socket_url = "wss://www.teachermate.com.cn/faye"
 
+        # 连接超时设置
         try:
-            # 建立WebSocket连接
-            self.websocket = await websockets.connect(socket_url)
+            self.websocket = await asyncio.wait_for(
+                websockets.connect(socket_url),
+                timeout=10.0
+            )
+        except asyncio.TimeoutError:
+            logger.error("WebSocket连接超时")
+            raise
 
-            # 启动接收消息的协程
-            receive_task = asyncio.create_task(self.receive_handler())
+        logger.info("WebSocket连接建立成功")
+        self.reconnect_attempts = 0  # 重置重连计数
 
-            # 主循环，发送连接消息
+        # 启动接收任务
+        self.receive_task = asyncio.create_task(self.receive_handler())
+
+        try:
+            # 发送订阅消息
+            subscribe_msg = f'[{{"channel":"/meta/subscribe","clientId":"{self.client_id}","subscription":"/sign/{self.sign_id}","id":"1"}}]'
+            await self.websocket.send(subscribe_msg)
+            logger.info(f"已订阅签到通道: {self.sign_id}")
+
+            # 主循环 - 发送心跳
             while not self.done.is_set() and not self.is_shutting_down:
                 try:
                     self.counter += 1
-                    connect_string = f'[{{"channel":"/meta/connect","clientId":"{self.client_id}","connectionType":"websocket","id":"{self.counter}"}}]'
+                    connect_msg = f'[{{"channel":"/meta/connect","clientId":"{self.client_id}","connectionType":"websocket","id":"{self.counter}"}}]'
 
-                    await self.websocket.send(connect_string)
+                    await asyncio.wait_for(
+                        self.websocket.send(connect_msg),
+                        timeout=5.0
+                    )
 
-                    # 等待5秒后发送下一次连接消息
                     await asyncio.sleep(self.wait_time)
 
+                except asyncio.TimeoutError:
+                    if not self.is_shutting_down:
+                        logger.warning("发送心跳超时")
                 except websockets.exceptions.ConnectionClosed:
                     break
                 except Exception as e:
                     if not self.is_shutting_down:
-                        print(f"发送消息错误: {e}")
+                        logger.error(f"发送消息错误: {e}")
                     break
 
-            # 等待接收任务完成
-            if not receive_task.done():
-                receive_task.cancel()
+        finally:
+            # 清理任务
+            await self._cleanup_tasks()
+
+    async def _cleanup_tasks(self) -> None:
+        """清理任务"""
+        if self.receive_task and not self.receive_task.done():
+            self.receive_task.cancel()
             try:
-                await receive_task
+                await self.receive_task
             except asyncio.CancelledError:
                 pass
+            except Exception as e:
+                if not self.is_shutting_down:
+                    logger.error(f"接收任务清理错误: {e}")
 
-        except Exception as e:
-            if not self.is_shutting_down:
-                print(f"WebSocket连接错误: {e}")
-        finally:
-            await self.close_connection()
-
-    async def graceful_shutdown(self):
-        """优雅关闭连接"""
-        print("graceful shutdown")
-        self.is_shutting_down = True
-        self.done.set()
         await self.close_connection()
 
-    async def close_connection(self):
+    async def graceful_shutdown(self) -> None:
+        """优雅关闭连接"""
+        if self.is_shutting_down:
+            return
+
+        logger.info(f"开始优雅关闭WebSocket客户端 (sign_id: {self.sign_id})")
+        self.is_shutting_down = True
+        self.done.set()
+        await self._cleanup_tasks()
+        logger.info(f"WebSocket客户端已关闭 (sign_id: {self.sign_id})")
+
+    async def close_connection(self) -> None:
         """关闭连接"""
         if self.websocket:
-            await self.websocket.close()
-            self.websocket = None
-
-
-def signal_handler(signum, frame):
-    """信号处理函数"""
-    sys.exit(0)
-
-
-async def main(sign_id, client_id):
-    """主函数"""
-    # 设置信号处理
-    signal.signal(signal.SIGINT, signal_handler)
-
-    client = TeacherMateWebSocketClient(sign_id)
-    client.client_id = client_id
-    await client.start()
-
-
-if __name__ == "__main__":
-    try:
-        sign_id = 3814670
-        import ad
-
-        clientId = ad.creatClientId(sign_id, 1447611)
-        asyncio.run(main(sign_id=sign_id, client_id=clientId))
-        pass
-    except KeyboardInterrupt:
-        pass
+            try:
+                await self.websocket.close()
+            except Exception as e:
+                if not self.is_shutting_down:
+                    logger.debug(f"关闭连接时出现预期外错误: {e}")
+            finally:
+                self.websocket = None
