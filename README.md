@@ -15,4 +15,4 @@
 ### 项目启动
 web启动于web.py<br>
 gui启动于run.py<br>
-openid配置于settings.py
+openid配置于config.ini
