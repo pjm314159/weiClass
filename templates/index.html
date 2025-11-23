@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>二维码状态监听器</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        .container {
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 30px;
+            text-align: center;
+        }
+        h1 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .waiting {
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #3498db;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 10px;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .info {
+            margin-top: 30px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            text-align: left;
+        }
+        .message {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #e9ecef;
+            border-radius: 5px;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>二维码状态监听器</h1>
+        <p>正在监听二维码状态，请稍候...</p>
+
+        <div id="status" class="status waiting">
+            <span class="loading"></span>
+            <span id="status-text">等待二维码扫描</span>
+        </div>
+
+        <div id="message" class="message" style="display: none;">
+            <strong>消息：</strong><span id="message-content"></span>
+        </div>
+
+        <div class="info">
+            <h3>说明：</h3>
+            <p>此页面会持续检查二维码状态，当检测到成功状态时，会自动跳转到目标页面。</p>
+            <p>当前监听端点：<code id="endpoint">/qr_code</code></p>
+            <p>检查间隔：<span id="interval">1</span> 秒</p>
+            <p>最后检查时间：<span id="last-check">-</span></p>
+            <p>检查次数：<span id="check-count">0</span></p>
+        </div>
+    </div>
+
+    <script>
+        // 配置
+        const CHECK_INTERVAL = 500; // 检查间隔（毫秒）- 修改为1秒
+
+        // 状态元素
+        const statusEl = document.getElementById('status');
+        const statusTextEl = document.getElementById('status-text');
+        const messageEl = document.getElementById('message');
+        const messageContentEl = document.getElementById('message-content');
+        const lastCheckEl = document.getElementById('last-check');
+        const checkCountEl = document.getElementById('check-count');
+        const intervalEl = document.getElementById('interval');
+
+        let checkCount = 0;
+        let pollingInterval;
+
+        // 更新最后检查时间
+        function updateLastCheckTime() {
+            const now = new Date();
+            lastCheckEl.textContent = now.toLocaleTimeString();
+        }
+
+        // 更新检查次数
+        function updateCheckCount() {
+            checkCount++;
+            checkCountEl.textContent = checkCount;
+        }
+
+        // 显示消息
+        function showMessage(message) {
+            if (message && message.trim() !== '') {
+                messageContentEl.textContent = message;
+                messageEl.style.display = 'block';
+            } else {
+                messageEl.style.display = 'none';
+            }
+        }
+
+        // 检查二维码状态
+        async function checkQRCodeStatus() {
+            try {
+                updateLastCheckTime();
+                updateCheckCount();
+
+                const response = await fetch('/qr_code');
+                const data = await response.json();
+
+                // 显示消息（如果有）
+                if (data.message) {
+                    showMessage(data.message);
+                }
+
+                if (data.success === 1) {
+                    // 检测到成功，立即跳转
+                    statusEl.className = 'status success';
+                    statusTextEl.textContent = '验证成功，正在跳转...';
+                    window.location.href = data.qr_url;
+                }
+            } catch (error) {
+                console.error('检查二维码状态时出错:', error);
+                statusTextEl.textContent = '检查状态时出错，继续尝试...';
+                showMessage('网络连接错误，正在重试...');
+            }
+        }
+
+        // 开始轮询
+        function startPolling() {
+            intervalEl.textContent = CHECK_INTERVAL / 1000;
+            checkQRCodeStatus(); // 立即执行一次
+            pollingInterval = setInterval(checkQRCodeStatus, CHECK_INTERVAL);
+        }
+
+        // 页面加载完成后开始监听
+        document.addEventListener('DOMContentLoaded', startPolling);
+    </script>
+</body>
+</html>
