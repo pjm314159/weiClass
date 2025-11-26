@@ -15,3 +15,6 @@
 web启动于web.py<br>
 gui启动于run.py<br>
 openid配置于config.ini
+***
+### openid 配置教程
+openid是微信用于识别用户的，微助教用浏览打开，复制网址里的openid就可以了
