@@ -3,12 +3,11 @@ import websockets
 import json
 import logging
 from typing import Optional, Callable
-
+import time
 logger = logging.getLogger(__name__)
 
 
 class TeacherMateWebSocketClient:
-    """改进的WebSocket客户端 - 更好的关闭机制"""
 
     def __init__(self, sign_id: int, qr_callback: Optional[Callable] = None):
         self.qr_callback = qr_callback
@@ -51,12 +50,18 @@ class TeacherMateWebSocketClient:
         try:
             qr_data = json.loads(message)
             if isinstance(qr_data, list) and len(qr_data) > 0:
-                qr_code_url = qr_data[0]["data"]["qrUrl"]
-                logger.info(f"获取到二维码URL: {qr_code_url[:50]}...")
+                qr_code_data = qr_data[0]["data"]
+                if qr_code_data["type"]==1:
+                    qr_code_url = qr_code_data["qrUrl"]
+                    logger.info(f"获取到二维码URL: {qr_code_url[:50]}...")
 
-                if self.qr_callback and not self.is_shutting_down:
-                    self.qr_callback(qr_code_url)
-
+                    if self.qr_callback and not self.is_shutting_down:
+                        self.qr_callback(qr_code_url)
+                elif qr_code_data["type"]==3:
+                    logger.info("qr_url为空，前方拥挤")
+                elif qr_code_data["type"]==2:
+                    logger.info(f"检测到关闭信息")
+                    await self.graceful_shutdown()
         except json.JSONDecodeError as e:
             logger.error(f"JSON解析失败: {e}")
         except KeyError as e:

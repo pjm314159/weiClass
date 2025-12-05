@@ -78,10 +78,9 @@ class Pipeline:
 
     async def wait_data(self) -> Any:
         """等待获取有效数据"""
-        max_retries = 60  # 最多重试60次
         retry_count = 0
 
-        while retry_count < max_retries and not self.shutdown_event.is_set():
+        while  not self.shutdown_event.is_set():
             try:
                 data = getData(self.openid)
                 logger.debug(f"获取到数据: {data}")
@@ -297,6 +296,16 @@ def create_pipeline():
     pipeline.start()
     logger.info("管道创建并启动成功")
 
+@app.after_request
+def add_header(response):
+    """
+    添加头部信息禁止缓存
+    """
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 @app.route('/')
 def index():
@@ -332,7 +341,6 @@ if __name__ == '__main__':
     # 创建并启动管道
     create_pipeline()
 
-    # 启动Flask应用
     app.run(
         host='0.0.0.0',
         port=5000,

@@ -38,8 +38,7 @@ def creatClientId(signId, courseId):
     "id": "3"
     }
     ]
-    r = requests.post(ws_url, json=f,verify=True)
-    j = json.loads(r.text)
+    requests.post(ws_url, json=f,verify=True)
     return clientId
 if __name__ == '__main__':
     signId = 3815546
