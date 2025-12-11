@@ -18,3 +18,8 @@ openid配置于config.ini
 ***
 ### openid 配置教程
 openid是微信用于识别用户的，微助教用浏览器打开，复制网址里的openid就可以了
+
+***
+### 另写了版本,用户友好型
+
+[用户友好型wei-class](https://github.com/pjm314159/wei-class?tab=readme-ov-file)
